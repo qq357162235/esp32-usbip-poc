@@ -32,6 +32,8 @@ void parse_request(const int sock, uint8_t* rx_buffer, size_t len);
 #define KEEPALIVE_IDLE              CONFIG_EXAMPLE_KEEPALIVE_IDLE
 #define KEEPALIVE_INTERVAL          CONFIG_EXAMPLE_KEEPALIVE_INTERVAL
 #define KEEPALIVE_COUNT             CONFIG_EXAMPLE_KEEPALIVE_COUNT
+#define EXAMPLE_WIFI_SSID           CONFIG_EXAMPLE_WIFI_SSID
+#define EXAMPLE_WIFI_PASSWORD       CONFIG_EXAMPLE_WIFI_PASSWORD
 
 static const char *TAG = "example";
 static EventGroupHandle_t wifi_event_grp;
@@ -265,7 +267,7 @@ esp_err_t wifi_init()
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_start() );
     // 初始化AP，设置SSID和密码
-    wifi_init_ap("ESP32-USBIP", "usbip1234");
+    wifi_init_ap(EXAMPLE_WIFI_SSID, EXAMPLE_WIFI_PASSWORD);
 
     ESP_LOGI(TAG, "wifi_init finished.");
 

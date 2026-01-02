@@ -33,4 +33,17 @@ menu "Example Configuration"
         default 3
         help
             Keep-alive probe packet retry count.
+
+    config EXAMPLE_WIFI_SSID
+        string "WiFi SSID"
+        default "ESP32-USBIP"
+        help
+            SSID (name) for the WiFi AP.
+
+    config EXAMPLE_WIFI_PASSWORD
+        string "WiFi Password"
+        default "usbip1234"
+        help
+            Password for the WiFi AP.
+
 endmenu
