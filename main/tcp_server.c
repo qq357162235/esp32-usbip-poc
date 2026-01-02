@@ -24,6 +24,7 @@
 #include "lwip/sockets.h"
 #include "lwip/sys.h"
 #include <lwip/netdb.h>
+#include "lwip/ip_addr.h"
 
 void parse_request(const int sock, uint8_t* rx_buffer, size_t len);
 
@@ -163,56 +164,70 @@ CLEAN_UP:
 
 void esp_event_handler(void* event_handler_arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
-    switch(event_id) 
+    if (event_base == WIFI_EVENT)
     {
-        case WIFI_EVENT_STA_START:
-            esp_wifi_connect();
-            break;
-
-        case IP_EVENT_STA_GOT_IP:{
-            char myIP[20];
-            memset(myIP, 0, 20);
-            ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-            sprintf(myIP, IPSTR, IP2STR(&event->ip_info.ip));
-            ESP_LOGE(TAG, "got ip: %s", myIP );
+        switch(event_id) 
+        {
+            case WIFI_EVENT_AP_START:
+                ESP_LOGI(TAG, "AP started");
+                // 获取AP的IP地址
+                esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+                if (ap_netif) {
+                    esp_netif_ip_info_t ip_info;
+                    esp_netif_get_ip_info(ap_netif, &ip_info);
+                    char myIP[20];
+                    sprintf(myIP, IPSTR, IP2STR(&ip_info.ip));
+                    ESP_LOGI(TAG, "AP IP address: %s", myIP);
+                }
+                xEventGroupSetBits(wifi_event_grp, WIFI_CONNECTED_BIT);
+                break;
             
-            xEventGroupSetBits(wifi_event_grp, WIFI_CONNECTED_BIT);
-            break;
-        }
-        case WIFI_EVENT_STA_DISCONNECTED:
-            ESP_LOGI(TAG,"Event State: Disconnected from WiFi");
-
-            if (1) 
-            {
-                esp_wifi_connect();
+            case WIFI_EVENT_AP_STOP:
+                ESP_LOGI(TAG, "AP stopped");
                 xEventGroupClearBits(wifi_event_grp, WIFI_CONNECTED_BIT);
-                ESP_LOGI(TAG,"Retry connecting to the WiFi AP");
-            }
-            else 
-            {
-                ESP_LOGI(TAG,"Connection to the WiFi AP failure\n");
-            }
-            break;
+                break;
             
-
-        default:
-            break;
+            case WIFI_EVENT_AP_STACONNECTED:{
+                wifi_event_ap_staconnected_t* event = (wifi_event_ap_staconnected_t*) event_data;
+                ESP_LOGI(TAG, "station %02x:%02x:%02x:%02x:%02x:%02x join, AID=%d", 
+                         event->mac[0], event->mac[1], event->mac[2], 
+                         event->mac[3], event->mac[4], event->mac[5], 
+                         event->aid);
+                break;
+            }
+            
+            case WIFI_EVENT_AP_STADISCONNECTED:{
+                wifi_event_ap_stadisconnected_t* event = (wifi_event_ap_stadisconnected_t*) event_data;
+                ESP_LOGI(TAG, "station %02x:%02x:%02x:%02x:%02x:%02x leave, AID=%d", 
+                         event->mac[0], event->mac[1], event->mac[2], 
+                         event->mac[3], event->mac[4], event->mac[5], 
+                         event->aid);
+                break;
+            }
+            
+            default:
+                break;
+        }
     }
 }
 
-void wifi_init_sta(char* ssid, char* pass)
+void wifi_init_ap(char* ssid, char* pass)
 {
-
     wifi_config_t wifi_config = {0};
-    strcpy((char*)wifi_config.sta.ssid, ssid);
-	if(pass) strcpy((char*)wifi_config.sta.password, pass);
+    strcpy((char*)wifi_config.ap.ssid, ssid);
+    if(pass) {
+        strcpy((char*)wifi_config.ap.password, pass);
+        wifi_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
+        wifi_config.ap.max_connection = 5;
+    } else {
+        wifi_config.ap.authmode = WIFI_AUTH_OPEN;
+    }
+    wifi_config.ap.ssid_hidden = 0;
 
-    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
-    // esp_wifi_disconnect();
-    ESP_ERROR_CHECK( esp_wifi_connect() );
+    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config));
 
-    ESP_LOGI(TAG, "wifi_init_sta finished. SSID:%s password:%s",
-             ssid, pass);
+    ESP_LOGI(TAG, "wifi_init_ap finished. SSID:%s password:%s",
+             ssid, pass ? pass : "none");
  
 }
 
@@ -223,21 +238,34 @@ esp_err_t wifi_init()
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_event_handler_instance_register(ESP_EVENT_ANY_BASE, ESP_EVENT_ANY_ID, esp_event_handler, NULL, NULL);
     
-    esp_netif_create_default_wifi_sta();
+    // 创建默认的AP网络接口
     esp_netif_create_default_wifi_ap();
 
-    esp_netif_t *esp_netif = NULL;
-    esp_netif = esp_netif_next(esp_netif);
-    esp_netif_set_hostname(esp_netif, "espressif-usbipd");
+    // 设置AP的IP地址和网络配置（可选，默认会使用192.168.4.1）
+    esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (ap_netif) {
+        esp_netif_dhcps_stop(ap_netif);
+        esp_netif_ip_info_t ip_info;
+        memset(&ip_info, 0, sizeof(ip_info));
+        ip_info.ip.addr = ipaddr_addr("192.168.4.1");
+        ip_info.gw.addr = ipaddr_addr("192.168.4.1");
+        ip_info.netmask.addr = ipaddr_addr("255.255.255.0");
+        esp_netif_set_ip_info(ap_netif, &ip_info);
+        esp_netif_dhcps_start(ap_netif);
+        
+        // 设置主机名
+        esp_netif_set_hostname(ap_netif, "espressif-usbipd");
+    }
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM) );
-    // ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_NULL) );
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+    // 设置为仅AP模式
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_start() );
-    wifi_init_sta("esp32", "espressif");
+    // 初始化AP，设置SSID和密码
+    wifi_init_ap("ESP32-USBIP", "usbip1234");
 
     ESP_LOGI(TAG, "wifi_init finished.");
 
