@@ -160,8 +160,89 @@ private:
 class USBIP
 {
 private:
+    // USBIP协议数据
+    usbip_import_t import_data;
+    usbip_devlist_t devlist_data;
     
+    // 序列号管理
+    uint32_t last_seqnum;
+    uint32_t last_unlink;
+    std::vector<uint32_t> seqnum_cache;
+    
+    // USB设备信息
+    usb_device_info_t device_info;
+    const usb_device_desc_t *device_desc;
+    
+    // 事件循环和同步
+    esp_event_loop_handle_t event_loop_handle;
+    SemaphoreHandle_t usb_sem;
+    SemaphoreHandle_t usb_sem1;
+    
+    // 网络和传输状态
+    int socket_fd;
+    bool is_ready;
+    bool finished;
+    usb_transfer_t *current_transfer;
+    
+    // USBIP设备实例
+    USBipDevice* usbip_device;
+    
+    // 事件ID定义
+    static const int USB_CTRL_RESP_EVENT = 0x1001;
+    static const int USB_EPx_RESP_EVENT = 0x1002;
+    static const size_t MAX_SEQNUM_CACHE = 999;
+
 public:
     USBIP();
     ~USBIP();
+    
+    // 初始化和清理
+    esp_err_t init();
+    esp_err_t deinit();
+    
+    // 设备管理
+    void set_device_info(const usb_device_info_t& info) { device_info = info; }
+    void set_device_desc(const usb_device_desc_t* desc) { device_desc = desc; }
+    const usb_device_info_t& get_device_info() const { return device_info; }
+    const usb_device_desc_t* get_device_desc() const { return device_desc; }
+    
+    // USBIP设备管理
+    esp_err_t set_usbip_device(USBipDevice* device);
+    USBipDevice* get_usbip_device() const { return usbip_device; }
+    
+    // 网络管理
+    void set_socket(int sock) { socket_fd = sock; }
+    int get_socket() const { return socket_fd; }
+    
+    // 状态管理
+    bool is_device_ready() const { return is_ready; }
+    void set_ready(bool ready) { is_ready = ready; }
+    
+    // 序列号缓存管理
+    bool is_seqnum_cached(uint32_t seqnum);
+    void add_seqnum_to_cache(uint32_t seqnum);
+    
+    // 响应发送
+    esp_err_t send_response(const void* data, size_t len, const char* log_tag);
+    
+    // 事件处理
+    void register_event_handlers();
+    void unregister_event_handlers();
+    
+    // 获取事件循环句柄
+    esp_event_loop_handle_t get_event_loop_handle() const { return event_loop_handle; }
+    
+private:
+    // 静态事件处理函数
+    static void usb_ctrl_callback(usb_transfer_t *transfer);
+    static void usb_read_callback(usb_transfer_t *transfer);
+    static void event_handler(void* event_handler_arg, esp_event_base_t event_base, 
+                             int32_t event_id, void* event_data);
+    static void submit_event_handler(void* event_handler_arg, esp_event_base_t event_base, 
+                                    int32_t event_id, void* event_data);
+    
+    // 辅助函数
+    void handle_ctrl_response(usb_transfer_t *transfer);
+    void handle_ep_response(usb_transfer_t *transfer);
+    void handle_submit_request(urb_data_t* data);
 };
