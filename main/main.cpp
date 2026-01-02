@@ -4,7 +4,11 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "usb/usb_host.h"
-
+#include "usb/cdc_acm_host.h"
+#include "usb/vcp_ch34x.hpp"
+#include "usb/vcp_cp210x.hpp"
+#include "usb/vcp_ftdi.hpp"
+#include "usb/vcp.hpp"
 
 #include <stdio.h>
 #include <string.h>
@@ -17,6 +21,8 @@
 #include <esp_vfs_fat.h>
 #include "nvs_flash.h"
 #include "usbip.hpp"
+
+using namespace esp_usb;
 
 
 extern "C" void start_server();
@@ -55,14 +61,24 @@ void init_usbip()
     host = new USBhost();
     host->registerClientCb(client_event_callback);
     host->init();
+    
+    // 安装CDC ACM驱动
+    ESP_LOGI("VCP", "Installing CDC-ACM driver");
+    ESP_ERROR_CHECK(cdc_acm_host_install(NULL));
+    
+    // 注册所有支持的VCP驱动
+    ESP_LOGI("VCP", "Registering VCP drivers");
+    VCP::register_driver<FT23x>();
+    VCP::register_driver<CP210x>();
+    VCP::register_driver<CH34x>();
 }
 
 extern "C" void app_main(void)
 {
-    esp_log_level_set("*", ESP_LOG_ERROR);
-    esp_log_level_set("*", ESP_LOG_NONE);
-    // esp_log_level_set("USB_EPx_RESP", ESP_LOG_NONE);
-    // esp_log_level_set("example", ESP_LOG_INFO);
+    // Set log level to INFO to see USB device enumeration and identification
+    esp_log_level_set("*", ESP_LOG_INFO);
+    esp_log_level_set("USB_HOST", ESP_LOG_DEBUG);
+    esp_log_level_set("USBIP", ESP_LOG_DEBUG);
     init_usbip();
 
     start_server();

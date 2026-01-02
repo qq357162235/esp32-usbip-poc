@@ -4,7 +4,6 @@
 #include <new>
 #include "esp_log.h"
 #include "esp_event.h"
-#include "byteswap.h"
 #include "lwip/err.h"
 #include "lwip/sockets.h"
 #include "lwip/sys.h"
@@ -43,6 +42,7 @@ static int _sock;
 static bool is_ready = false;
 static bool finished = false;
 static usb_transfer_t *_transfer;
+static USBipDevice* g_usbip_device = nullptr; // Global pointer to USBipDevice instance
 
 #define USB_CTRL_RESP   0x1001
 #define USB_EPx_RESP    0x1002
@@ -60,7 +60,9 @@ static void usb_ctrl_cb(usb_transfer_t *transfer)
     esp_err_t err = esp_event_post_to(loop_handle, USBIP_EVENT_BASE, USB_CTRL_RESP, (void*)&transfer, sizeof(usb_transfer_t*), 10);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to post USB_CTRL_RESP event: %d", err);
-        dev->deallocate(transfer); // Clean up if event post fails
+        if (g_usbip_device != nullptr) {
+            g_usbip_device->deallocate(transfer); // Clean up if event post fails
+        }
     }
 }
 
@@ -69,7 +71,9 @@ static void usb_read_cb(usb_transfer_t *transfer)
     esp_err_t err = esp_event_post_to(loop_handle, USBIP_EVENT_BASE, USB_EPx_RESP, (void*)&transfer, sizeof(usb_transfer_t*), 10);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to post USB_EPx_RESP event: %d", err);
-        dev->deallocate(transfer); // Clean up if event post fails
+        if (g_usbip_device != nullptr) {
+            g_usbip_device->deallocate(transfer); // Clean up if event post fails
+        }
     }
 }
 
@@ -212,11 +216,9 @@ static void _event_handler1(void* event_handler_arg, esp_event_base_t event_base
             ESP_LOG_BUFFER_HEX("SUBMIT", rx_buffer + start, 48);
 
             usbip_submit_t* _req = (usbip_submit_t*)(rx_buffer + start);
-            usbip_submit_t* req = nullptr;
-            try {
-                req = new usbip_submit_t();
-            } catch (const std::bad_alloc& e) {
-                ESP_LOGE(TAG, "Failed to allocate usbip_submit_t: %s", e.what());
+            usbip_submit_t* req = new (std::nothrow) usbip_submit_t();
+            if (req == nullptr) {
+                ESP_LOGE(TAG, "Failed to allocate usbip_submit_t");
                 break;
             }
             int tl = 0;
@@ -318,6 +320,15 @@ USBipDevice::USBipDevice()
     xSemaphoreGive(usb_sem);
     xSemaphoreGive(usb_sem1);
 
+    // Initialize global pointer
+    g_usbip_device = this;
+    
+    // Initialize device type
+    device_type = USB_DEVICE_TYPE_UNKNOWN;
+    cdc_intf_num = 0;
+    cdc_data_intf_num = 0;
+    msc_intf_num = 0;
+
     esp_event_handler_register_with(loop_handle, USBIP_EVENT_BASE, USB_CTRL_RESP, _event_handler, this);
     esp_event_handler_register_with(loop_handle, USBIP_EVENT_BASE, USB_EPx_RESP, _event_handler, this);
     esp_event_handler_register_with(loop_handle, USBIP_EVENT_BASE, USBIP_CMD_SUBMIT, _event_handler1, this);
@@ -330,13 +341,16 @@ USBipDevice::~USBipDevice()
     esp_event_handler_unregister_with(loop_handle, USBIP_EVENT_BASE, ESP_EVENT_ANY_ID, _event_handler1);
     memset(&import_data, 0, sizeof(usbip_import_t));
     memset(&devlist_data, 0, sizeof(usbip_devlist_t));
+    
+    // Clear global pointer
+    g_usbip_device = nullptr;
 }
 
 bool USBipDevice::init(USBhost* host)
 {
     _host = host;
 
-    usb_device_info_t info = host->getDeviceInfo();
+    // Use the global info variable already set in main.cpp
     esp_err_t err = USBhostDevice::init(1032);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize USBhostDevice: %d", err);
@@ -345,6 +359,9 @@ bool USBipDevice::init(USBhost* host)
     xfer_ctrl->callback = usb_ctrl_cb;
 
     config_desc = host->getConfigurationDescriptor();
+    
+    // Detect device type based on USB interface classes
+    detect_device_type();
     
     int offset = 0;
     for (size_t n = 0; n < config_desc->bNumInterfaces; n++)
@@ -379,6 +396,53 @@ bool USBipDevice::init(USBhost* host)
     return true;
 }
 
+void USBipDevice::detect_device_type()
+{
+    device_type = USB_DEVICE_TYPE_UNKNOWN;
+    
+    int offset = 0;
+    for (size_t n = 0; n < config_desc->bNumInterfaces; n++)
+    {
+        const usb_intf_desc_t *intf = usb_parse_interface_descriptor(config_desc, n, 0, &offset);
+        if (!intf) continue;
+        
+        ESP_LOGI(TAG, "Interface %d: Class=0x%02x, SubClass=0x%02x, Protocol=0x%02x", 
+                 n, intf->bInterfaceClass, intf->bInterfaceSubClass, intf->bInterfaceProtocol);
+        
+        // Check for CDC ACM (VCP) device
+        if (intf->bInterfaceClass == 0x02 && intf->bInterfaceSubClass == 0x02)
+        {
+            // 通信类接口
+            cdc_intf_num = n;
+            device_type = USB_DEVICE_TYPE_VCP;
+            ESP_LOGI(TAG, "Detected VCP (CDC ACM) device - Communication Interface");
+        }
+        else if (intf->bInterfaceClass == 0x0A && intf->bInterfaceSubClass == 0x00)
+        {
+            // 数据类接口
+            cdc_data_intf_num = n;
+            device_type = USB_DEVICE_TYPE_VCP;
+            ESP_LOGI(TAG, "Detected VCP (CDC ACM) device - Data Interface");
+        }
+        // Check for MSC device
+        else if (intf->bInterfaceClass == 0x08 && intf->bInterfaceSubClass == 0x06 && intf->bInterfaceProtocol == 0x50)
+        {
+            // SCSI透明命令集 (Bulk-Only Transport)
+            msc_intf_num = n;
+            device_type = USB_DEVICE_TYPE_MSC;
+            ESP_LOGI(TAG, "Detected MSC device - Bulk-Only Transport");
+        }
+        // Check for HID device
+        else if (intf->bInterfaceClass == 0x03)
+        {
+            device_type = USB_DEVICE_TYPE_HID;
+            ESP_LOGI(TAG, "Detected HID device");
+        }
+    }
+    
+    ESP_LOGI(TAG, "Final device type: %d", device_type);
+}
+
 void USBipDevice::fill_import_data()
 {
     memset(&import_data, 0, sizeof(usbip_import_t));
@@ -391,9 +455,9 @@ void USBipDevice::fill_import_data()
     import_data.devnum = __bswap_32(1);
 
     import_data.speed = info.speed ? __bswap_32(2) : __bswap_32(1);
-    devlist_data.idVendor = __bswap_16(dev_desc->idVendor);
-    devlist_data.idProduct = __bswap_16(dev_desc->idProduct);
-    devlist_data.bcdDevice = __bswap_16(dev_desc->bcdDevice);
+    import_data.idVendor = __bswap_16(dev_desc->idVendor);
+    import_data.idProduct = __bswap_16(dev_desc->idProduct);
+    import_data.bcdDevice = __bswap_16(dev_desc->bcdDevice);
     import_data.bDeviceClass = dev_desc->bDeviceClass;
     import_data.bDeviceSubClass = dev_desc->bDeviceSubClass;
     import_data.bDeviceProtocol = dev_desc->bDeviceProtocol;
@@ -435,9 +499,23 @@ void USBipDevice::fill_list_data()
     devlist_data.bNumInterfaces = config_desc->bNumInterfaces;
 }
 
+// CDC ACM specific definitions
+#define CDC_ACM_SET_LINE_CODING        0x20
+#define CDC_ACM_GET_LINE_CODING        0x21
+#define CDC_ACM_SET_CONTROL_LINE_STATE 0x22
+
+// Line coding structure for CDC ACM
+typedef struct {
+    uint32_t dwDTERate;      // 波特率
+    uint8_t bCharFormat;      // 停止位: 0=1, 1=1.5, 2=2
+    uint8_t bParityType;      // 校验位: 0=无, 1=奇, 2=偶, 3=标记, 4=空格
+    uint8_t bDataBits;        // 数据位: 5, 6, 7, 8, 16
+} cdc_line_coding_t;
+
 int USBipDevice::req_ctrl_xfer(usbip_submit_t* req)
 {
-    usb_transfer_t* _xfer_ctrl = allocate(1000);
+    // Allocate larger buffer for control transfers (especially for configuration descriptors)
+    usb_transfer_t* _xfer_ctrl = allocate(2048);
     if (_xfer_ctrl == NULL) {
         ESP_LOGE(TAG, "Failed to allocate control transfer buffer");
         return -1;
@@ -448,13 +526,42 @@ int USBipDevice::req_ctrl_xfer(usbip_submit_t* req)
 
     usb_setup_packet_t * temp = (usb_setup_packet_t *)_xfer_ctrl->data_buffer;
     size_t n = 0;
+    int _n = __bswap_32(req->length);
+    
+    // First copy the setup packet
+    memcpy(temp->val, (uint8_t*)&req->setup, 8);
+    
+    // Check if this is a CDC ACM specific request
+    if (device_type == USB_DEVICE_TYPE_VCP) {
+        // Process CDC ACM control requests
+        if (temp->bmRequestType == 0x21 && temp->bRequest == CDC_ACM_SET_LINE_CODING) {
+            ESP_LOGI(TAG, "CDC ACM: SET_LINE_CODING");
+            // This request sets the line coding parameters
+            cdc_line_coding_t* line_coding = (cdc_line_coding_t*)&req->transfer_buffer;
+            ESP_LOGI(TAG, "  Baud rate: %d", __bswap_32(line_coding->dwDTERate));
+            ESP_LOGI(TAG, "  Data bits: %d", line_coding->bDataBits);
+            ESP_LOGI(TAG, "  Parity: %d", line_coding->bParityType);
+            ESP_LOGI(TAG, "  Stop bits: %d", line_coding->bCharFormat);
+        } else if (temp->bmRequestType == 0xA1 && temp->bRequest == CDC_ACM_GET_LINE_CODING) {
+            ESP_LOGI(TAG, "CDC ACM: GET_LINE_CODING");
+            // This request gets the current line coding parameters
+            // We can return default values since we're just passing through
+        } else if (temp->bmRequestType == 0x21 && temp->bRequest == CDC_ACM_SET_CONTROL_LINE_STATE) {
+            ESP_LOGI(TAG, "CDC ACM: SET_CONTROL_LINE_STATE");
+            // This request sets control line states (DTR/RTS)
+            uint16_t control_signal = ((uint16_t*)&req->transfer_buffer)[0];
+            bool dtr = (control_signal & 0x0001) != 0;
+            bool rts = (control_signal & 0x0002) != 0;
+            ESP_LOGI(TAG, "  DTR: %s, RTS: %s", dtr ? "ON" : "OFF", rts ? "ON" : "OFF");
+        }
+    }
+    
+    // Then copy data if this is an OUT transfer
     if (req->header.direction == 0) // 0: USBIP_DIR_OUT
     {
-        n = __bswap_32(req->length);
-        memcpy(_xfer_ctrl->data_buffer, (void*)&req->transfer_buffer, n);
+        n = _n;
+        memcpy(_xfer_ctrl->data_buffer + 8, (void*)&req->transfer_buffer, n);
     }
-    int _n = __bswap_32(req->length);
-    memcpy(temp->val, (uint8_t*)&req->setup, 8 + n);
     // Transfer buffer length is set based on direction: OUT = transfer_buffer_length, IN = 0
     // ISO transfers: no padding between packets
     _xfer_ctrl->num_bytes = sizeof(usb_setup_packet_t) + __bswap_32(req->length);
@@ -474,58 +581,62 @@ int USBipDevice::req_ctrl_xfer(usbip_submit_t* req)
 int USBipDevice::req_ep_xfer(usbip_submit_t* req)
 {
     size_t _len = __bswap_32(req->length);
-    // ESP_LOG_BUFFER_HEX_LEVEL("xfer ep", req, 48, ESP_LOG_ERROR);
-
+    
     uint16_t mps = 64;
+    uint8_t ep_addr = __bswap_32(req->header.ep);
+    int direction = __bswap_32(req->header.direction);
+    
+    // Log for VCP devices
+    if (device_type == USB_DEVICE_TYPE_VCP) {
+        ESP_LOGI(TAG, "VCP EP Transfer: EP=%d, Dir=%s, Len=%d", 
+                 ep_addr, direction ? "IN" : "OUT", _len);
+    }
 
-    if (req->header.direction != 0)
+    // Get maximum packet size from endpoint descriptor
+    if (direction != 0)
     {
-        uint8_t adr = __bswap_32(req->header.ep);
-        const usb_ep_desc_t *ep = endpoints[adr][1];
+        const usb_ep_desc_t *ep = endpoints[ep_addr][1];
         if (ep)
         {
             mps = ep->wMaxPacketSize;
         } else {
-            ESP_LOGE("", "missing EP%d\n", adr);
+            ESP_LOGE("", "missing EP%d\n", ep_addr);
             return 0;
         }
 
         _len = usb_round_up_to_mps(_len, mps);
-        // ESP_LOGE("", "mps: %d[%d]\n", mps, _len);
-    }
-    else
-    {
-        ESP_LOG_BUFFER_HEX("", req, _len);
     }
 
+    // For VCP devices, ensure we handle bulk transfers correctly
+    if (device_type == USB_DEVICE_TYPE_VCP) {
+        // VCP typically uses bulk endpoints for data transfer
+        // No special handling needed here, just ensure proper buffer allocation
+    }
+    
+    // Allocate transfer buffer
     usb_transfer_t *xfer_read = allocate(_len);
     if(xfer_read == NULL) {
         ESP_LOGE(TAG, "Failed to allocate transfer buffer: len=%d", _len);
         return 0;
     }
+    
     xfer_read->callback = &usb_read_cb;
     xfer_read->context = req;
-    xfer_read->bEndpointAddress = __bswap_32(req->header.ep);
-    // printf("req_ep_xfer ep: %d[%d], dir: %d\n", __bswap_32(req->header.ep), xfer_read->bEndpointAddress, __bswap_32(req->header.direction));
-    ESP_LOG_BUFFER_HEX_LEVEL("", req, 48, ESP_LOG_WARN);
-
+    xfer_read->bEndpointAddress = ep_addr | (direction << 7);
+    
     int n = 0;
-    if (req->header.direction == 0)
+    if (direction == 0)
     {
+        // OUT transfer: copy data from request to buffer
         memcpy(xfer_read->data_buffer, (void*)&req->transfer_buffer, _len);
         n = _len;
     }
-    int _n = _len;
-
-    // Transfer buffer length is set based on direction: OUT = transfer_buffer_length, IN = 0
-    // ISO transfers: no padding between packets
+    
+    // Set transfer parameters
     xfer_read->num_bytes = _len;
-    // if(xfer_read->num_bytes == 0x100 && req->header.direction != 0) xfer_read->num_bytes = 0xff;
-    xfer_read->bEndpointAddress = __bswap_32(req->header.ep) | (__bswap_32(req->header.direction) << 7);
-    // ESP_LOG_BUFFER_HEX("", temp->val, len - 40);
-    // printf("num_bytes_epx[%d/%d]: %d\n", n, _n, xfer_read->num_bytes);
     xfer_read->context = req;
 
+    // Submit transfer
     esp_err_t err = usb_host_transfer_submit(xfer_read);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to submit endpoint transfer: %d", err);
@@ -577,11 +688,9 @@ extern "C" void parse_request(const int sock, uint8_t* rx_buffer, size_t len)
     case USBIP_CMD_UNLINK:{
         ESP_LOGI(TAG, "USBIP_CMD_UNLINK");
         usbip_submit_t* _req = (usbip_submit_t*)(rx_buffer);
-        usbip_submit_t* req = nullptr;
-        try {
-            req = new usbip_submit_t(); // make it heap caps malloc
-        } catch (const std::bad_alloc& e) {
-            ESP_LOGE(TAG, "Failed to allocate usbip_submit_t: %s", e.what());
+        usbip_submit_t* req = new (std::nothrow) usbip_submit_t(); // Use nothrow version to avoid exceptions
+        if (req == nullptr) {
+            ESP_LOGE(TAG, "Failed to allocate usbip_submit_t");
             break;
         }
         last_unlink = __bswap_32(_req->flags);

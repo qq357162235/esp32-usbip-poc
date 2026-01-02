@@ -15,5 +15,6 @@
     "--compile-commands-dir=c:\\Users\\JDL\\Project\\esp32-usbip-poc\\build"
   ],
   "idf.portWin": "COM6",
-  "idf.flashType": "JTAG"
+  "idf.flashType": "JTAG",
+  "idf.currentSetup": "C:/Users/JDL/.espressif/frameworks/esp-idf-v5.5.2/"
 }

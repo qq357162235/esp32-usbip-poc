@@ -275,7 +275,6 @@ esp_err_t wifi_init()
 void start_server()
 {
     ESP_ERROR_CHECK(nvs_flash_init());
-    ESP_ERROR_CHECK(esp_netif_init());
     wifi_init();
 
     xTaskCreatePinnedToCore(tcp_server_task, "tcp_server", 1 * 4096, (void*)AF_INET, 21, NULL, 1);

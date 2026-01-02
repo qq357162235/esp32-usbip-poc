@@ -1,6 +1,9 @@
 #pragma once
 #include <string.h>
 #include "usb/usb_host.h"
+#include "usb/cdc_acm_host.h"
+#include "usb/vcp.hpp"
+#include "usb/vcp_cp210x.hpp"
 #include "esp_event.h"
 #include "usb_device.hpp"
 
@@ -117,6 +120,14 @@ extern usb_device_info_t info;
 extern const usb_device_desc_t *dev_desc;
 
 
+// USB设备类型枚举
+typedef enum {
+    USB_DEVICE_TYPE_UNKNOWN = 0,
+    USB_DEVICE_TYPE_VCP,       // CDC ACM虚拟串口
+    USB_DEVICE_TYPE_MSC,       // 大容量存储设备
+    USB_DEVICE_TYPE_HID        // 人机接口设备
+} usb_device_type_t;
+
 class USBipDevice : public USBhostDevice
 {
 private:
@@ -124,6 +135,12 @@ private:
     const usb_ep_desc_t * ep_out;
     const usb_ep_desc_t * endpoints[15][2];
     const usb_config_desc_t *config_desc;
+    usb_device_type_t device_type;
+    
+    // 设备特定参数
+    uint8_t cdc_intf_num;
+    uint8_t cdc_data_intf_num;
+    uint8_t msc_intf_num;
 
 public:
     USBipDevice();
@@ -132,10 +149,12 @@ public:
 
     int req_ctrl_xfer(usbip_submit_t* req);
     int req_ep_xfer(usbip_submit_t* req);
+    usb_device_type_t get_device_type() { return device_type; }
 
 private:
     void fill_import_data();
     void fill_list_data();
+    void detect_device_type();
 };
 
 class USBIP
