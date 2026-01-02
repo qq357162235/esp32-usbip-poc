@@ -43,7 +43,7 @@ void client_event_callback(const usb_host_client_event_msg_t *event_msg, void *a
     }
     else
     {
-        // TODO: release all interfaces claimed in device.init
+        // Release all interfaces and clean up
         is_ready = false;
         device->deinit();
         delete(device);

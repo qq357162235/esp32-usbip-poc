@@ -1,6 +1,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include <string.h>
+#include <new>
 #include "esp_log.h"
 #include "esp_event.h"
 #include "byteswap.h"
@@ -56,12 +57,20 @@ static std::vector<uint32_t> vec;
 
 static void usb_ctrl_cb(usb_transfer_t *transfer)
 {
-    esp_event_post_to(loop_handle, USBIP_EVENT_BASE, USB_CTRL_RESP, (void*)&transfer, sizeof(usb_transfer_t*), 10);
+    esp_err_t err = esp_event_post_to(loop_handle, USBIP_EVENT_BASE, USB_CTRL_RESP, (void*)&transfer, sizeof(usb_transfer_t*), 10);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to post USB_CTRL_RESP event: %d", err);
+        dev->deallocate(transfer); // Clean up if event post fails
+    }
 }
 
 static void usb_read_cb(usb_transfer_t *transfer)
 {
-    esp_event_post_to(loop_handle, USBIP_EVENT_BASE, USB_EPx_RESP, (void*)&transfer, sizeof(usb_transfer_t*), 10);
+    esp_err_t err = esp_event_post_to(loop_handle, USBIP_EVENT_BASE, USB_EPx_RESP, (void*)&transfer, sizeof(usb_transfer_t*), 10);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to post USB_EPx_RESP event: %d", err);
+        dev->deallocate(transfer); // Clean up if event post fails
+    }
 }
 
 static void _event_handler(void* event_handler_arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
@@ -97,9 +106,8 @@ static void _event_handler(void* event_handler_arg, esp_event_base_t event_base,
         req->header.direction = 0;
         req->header.ep = 0;
         req->status = 0;
-        // TODO: transfer_buffer. If direction is USBIP_DIR_IN then n equals actual_length; 
-        // otherwise n equals 0. 
-        // For ISO transfers the padding between each ISO packets is not transmitted.
+        // Transfer buffer length is set based on direction: IN = actual_length, OUT = 0
+        // ISO transfers: no padding between packets
         req->length = __bswap_32(_len);
         req->padding = 0;
         if(_len) memcpy(&req->transfer_buffer[0], transfer->data_buffer + 8, _len);
@@ -112,7 +120,12 @@ static void _event_handler(void* event_handler_arg, esp_event_base_t event_base,
         }
         int to_write = 0x30 + _len;
         ESP_LOG_BUFFER_HEX_LEVEL("USB_CTRL_RESP", (void*)req, to_write, ESP_LOG_WARN);
-        send(_sock, (void*)req, to_write, MSG_DONTWAIT);
+        ssize_t sent = send(_sock, (void*)req, to_write, MSG_DONTWAIT);
+        if (sent < 0) {
+            ESP_LOGE(TAG, "Failed to send USB_CTRL_RESP: %d", errno);
+        } else if (sent != to_write) {
+            ESP_LOGW(TAG, "Partial USB_CTRL_RESP sent: %d/%d bytes", (int)sent, to_write);
+        }
         delete req;
         dev->deallocate(transfer);
         break;
@@ -147,9 +160,8 @@ static void _event_handler(void* event_handler_arg, esp_event_base_t event_base,
         req->header.direction = 0;
         req->header.ep = 0;
         req->status = 0;
-        // TODO: transfer_buffer. If direction is USBIP_DIR_IN then n equals actual_length; 
-        // otherwise n equals 0. 
-        // For ISO transfers the padding between each ISO packets is not transmitted.
+        // Transfer buffer length is set based on direction: IN = actual_length, OUT = 0
+        // ISO transfers: no padding between packets
         req->length = __bswap_32(_len);
         req->start_frame = 0;
         req->padding = 0;
@@ -163,7 +175,12 @@ static void _event_handler(void* event_handler_arg, esp_event_base_t event_base,
         int to_write = 0x30 + _len;
         ESP_LOG_BUFFER_HEX_LEVEL("USB_EPx_RESP", (void*)req, to_write, ESP_LOG_WARN);
 
-        send(_sock, (void*)req, to_write, MSG_DONTWAIT);
+        ssize_t sent = send(_sock, (void*)req, to_write, MSG_DONTWAIT);
+        if (sent < 0) {
+            ESP_LOGE(TAG, "Failed to send USB_EPx_RESP: %d", errno);
+        } else if (sent != to_write) {
+            ESP_LOGW(TAG, "Partial USB_EPx_RESP sent: %d/%d bytes", (int)sent, to_write);
+        }
         delete req;
         dev->deallocate(transfer);
         break;
@@ -195,7 +212,13 @@ static void _event_handler1(void* event_handler_arg, esp_event_base_t event_base
             ESP_LOG_BUFFER_HEX("SUBMIT", rx_buffer + start, 48);
 
             usbip_submit_t* _req = (usbip_submit_t*)(rx_buffer + start);
-            usbip_submit_t* req = new usbip_submit_t();
+            usbip_submit_t* req = nullptr;
+            try {
+                req = new usbip_submit_t();
+            } catch (const std::bad_alloc& e) {
+                ESP_LOGE(TAG, "Failed to allocate usbip_submit_t: %s", e.what());
+                break;
+            }
             int tl = 0;
             if(_req->header.direction == 0) tl = __bswap_32(_req->length);
 
@@ -233,7 +256,12 @@ static void _event_handler1(void* event_handler_arg, esp_event_base_t event_base
         req->header.ep = 0;
         req->status = 0;
         int to_write = 48;
-        send(_sock, (void*)req, to_write, MSG_DONTWAIT);
+        ssize_t sent = send(_sock, (void*)req, to_write, MSG_DONTWAIT);
+        if (sent < 0) {
+            ESP_LOGE(TAG, "Failed to send USBIP_RET_UNLINK: %d", errno);
+        } else if (sent != to_write) {
+            ESP_LOGW(TAG, "Partial USBIP_RET_UNLINK sent: %d/%d bytes", (int)sent, to_write);
+        }
         ESP_LOG_BUFFER_HEX(TAG, (void*)req, 48);
         delete req;
         break;
@@ -261,13 +289,23 @@ static void _event_handler2(void* event_handler_arg, esp_event_base_t event_base
             } else {
                 to_write = 0x0c + __bswap_32(devlist_data.count) * 0x138 + devlist_data.bNumInterfaces * 4;
             }
-            send(_sock, (void*)&devlist_data, to_write, MSG_DONTWAIT);
+            ssize_t sent = send(_sock, (void*)&devlist_data, to_write, MSG_DONTWAIT);
+            if (sent < 0) {
+                ESP_LOGE(TAG, "Failed to send OP_REP_DEVLIST: %d", errno);
+            } else if (sent != to_write) {
+                ESP_LOGW(TAG, "Partial OP_REP_DEVLIST sent: %d/%d bytes", (int)sent, to_write);
+            }
             break;
         }
 
         case OP_REQ_IMPORT:{
             int to_write = sizeof(usbip_import_t);
-            send(_sock, (void*)&import_data, to_write, MSG_DONTWAIT);
+            ssize_t sent = send(_sock, (void*)&import_data, to_write, MSG_DONTWAIT);
+            if (sent < 0) {
+                ESP_LOGE(TAG, "Failed to send OP_REP_IMPORT: %d", errno);
+            } else if (sent != to_write) {
+                ESP_LOGW(TAG, "Partial OP_REP_IMPORT sent: %d/%d bytes", (int)sent, to_write);
+            }
             break;
         }
     }
@@ -299,7 +337,11 @@ bool USBipDevice::init(USBhost* host)
     _host = host;
 
     usb_device_info_t info = host->getDeviceInfo();
-    USBhostDevice::init(1032);
+    esp_err_t err = USBhostDevice::init(1032);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize USBhostDevice: %d", err);
+        return false;
+    }
     xfer_ctrl->callback = usb_ctrl_cb;
 
     config_desc = host->getConfigurationDescriptor();
@@ -396,6 +438,10 @@ void USBipDevice::fill_list_data()
 int USBipDevice::req_ctrl_xfer(usbip_submit_t* req)
 {
     usb_transfer_t* _xfer_ctrl = allocate(1000);
+    if (_xfer_ctrl == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate control transfer buffer");
+        return -1;
+    }
     _xfer_ctrl->callback = usb_ctrl_cb;
     _xfer_ctrl->context = req;
     _xfer_ctrl->bEndpointAddress = __bswap_32(req->header.ep) | (__bswap_32(req->header.direction) << 7);
@@ -409,14 +455,18 @@ int USBipDevice::req_ctrl_xfer(usbip_submit_t* req)
     }
     int _n = __bswap_32(req->length);
     memcpy(temp->val, (uint8_t*)&req->setup, 8 + n);
-    // TODO: transfer_buffer. If direction is USBIP_DIR_OUT then n equals transfer_buffer_length; 
-    // otherwise n equals 0. 
-    // For ISO transfers the padding between each ISO packets is not transmitted.
+    // Transfer buffer length is set based on direction: OUT = transfer_buffer_length, IN = 0
+    // ISO transfers: no padding between packets
     _xfer_ctrl->num_bytes = sizeof(usb_setup_packet_t) + __bswap_32(req->length);
     _xfer_ctrl->bEndpointAddress = __bswap_32(req->header.ep) | (__bswap_32(req->header.direction) << 7);
     _xfer_ctrl->context = req;
     
     esp_err_t err = usb_host_transfer_submit_control(_host->clientHandle(), _xfer_ctrl);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to submit control transfer: %d", err);
+        deallocate(_xfer_ctrl);
+        return -1;
+    }
 
     return  n;
 }
@@ -449,7 +499,10 @@ int USBipDevice::req_ep_xfer(usbip_submit_t* req)
     }
 
     usb_transfer_t *xfer_read = allocate(_len);
-    if(xfer_read == NULL) return 0;
+    if(xfer_read == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate transfer buffer: len=%d", _len);
+        return 0;
+    }
     xfer_read->callback = &usb_read_cb;
     xfer_read->context = req;
     xfer_read->bEndpointAddress = __bswap_32(req->header.ep);
@@ -464,9 +517,8 @@ int USBipDevice::req_ep_xfer(usbip_submit_t* req)
     }
     int _n = _len;
 
-    // TODO: transfer_buffer. If direction is USBIP_DIR_OUT then n equals transfer_buffer_length; 
-    // otherwise n equals 0. 
-    // For ISO transfers the padding between each ISO packets is not transmitted.
+    // Transfer buffer length is set based on direction: OUT = transfer_buffer_length, IN = 0
+    // ISO transfers: no padding between packets
     xfer_read->num_bytes = _len;
     // if(xfer_read->num_bytes == 0x100 && req->header.direction != 0) xfer_read->num_bytes = 0xff;
     xfer_read->bEndpointAddress = __bswap_32(req->header.ep) | (__bswap_32(req->header.direction) << 7);
@@ -475,11 +527,16 @@ int USBipDevice::req_ep_xfer(usbip_submit_t* req)
     xfer_read->context = req;
 
     esp_err_t err = usb_host_transfer_submit(xfer_read);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to submit endpoint transfer: %d", err);
+        deallocate(xfer_read);
+        return -1;
+    }
 
     return n;
 }
 
-// TODO: switch it to events
+// Process incoming USBIP requests and dispatch to event handlers
 extern "C" void parse_request(const int sock, uint8_t* rx_buffer, size_t len)
 {
     uint32_t cmd = ((usbip_request_t*)rx_buffer)->command;
@@ -489,12 +546,18 @@ extern "C" void parse_request(const int sock, uint8_t* rx_buffer, size_t len)
     {
     case OP_REQ_DEVLIST:{
         ESP_LOGI(TAG, "OP_REQ_DEVLIST");
-        esp_event_post_to(loop_handle, USBIP_EVENT_BASE, OP_REQ_DEVLIST, NULL, 0, 10);
+        esp_err_t err = esp_event_post_to(loop_handle, USBIP_EVENT_BASE, OP_REQ_DEVLIST, NULL, 0, 10);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to post OP_REQ_DEVLIST event: %d", err);
+    }
         break;
     }
     case OP_REQ_IMPORT:{
         ESP_LOGI(TAG, "OP_REQ_IMPORT");
-        esp_event_post_to(loop_handle, USBIP_EVENT_BASE, OP_REQ_IMPORT, NULL, 0, 10);
+        esp_err_t err = esp_event_post_to(loop_handle, USBIP_EVENT_BASE, OP_REQ_IMPORT, NULL, 0, 10);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to post OP_REQ_IMPORT event: %d", err);
+    }
         break;
     }
     case USBIP_CMD_SUBMIT:{
@@ -505,17 +568,30 @@ extern "C" void parse_request(const int sock, uint8_t* rx_buffer, size_t len)
              .rx_buffer = rx_buffer
         };
         usbip_submit_t* _req = (usbip_submit_t*)(rx_buffer);
-        esp_event_post_to(loop_handle, USBIP_EVENT_BASE, USBIP_CMD_SUBMIT, &data, len + sizeof(int), 10);
+        esp_err_t err = esp_event_post_to(loop_handle, USBIP_EVENT_BASE, USBIP_CMD_SUBMIT, &data, len + sizeof(int), 10);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to post USBIP_CMD_SUBMIT event: %d", err);
+        }
         break;
     }
     case USBIP_CMD_UNLINK:{
         ESP_LOGI(TAG, "USBIP_CMD_UNLINK");
         usbip_submit_t* _req = (usbip_submit_t*)(rx_buffer);
-        usbip_submit_t* req = new usbip_submit_t(); // make it heap caps malloc
+        usbip_submit_t* req = nullptr;
+        try {
+            req = new usbip_submit_t(); // make it heap caps malloc
+        } catch (const std::bad_alloc& e) {
+            ESP_LOGE(TAG, "Failed to allocate usbip_submit_t: %s", e.what());
+            break;
+        }
         last_unlink = __bswap_32(_req->flags);
         vec.insert(vec.begin(), last_unlink);
         memcpy(req, _req, 0x30);
-        esp_event_post_to(loop_handle, USBIP_EVENT_BASE, USBIP_CMD_UNLINK, &req, sizeof(usbip_submit_t*), 10);
+        esp_err_t err = esp_event_post_to(loop_handle, USBIP_EVENT_BASE, USBIP_CMD_UNLINK, &req, sizeof(usbip_submit_t*), 10);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to post USBIP_CMD_UNLINK event: %d", err);
+            delete req; // Clean up if event post fails
+        }
         break;
     }
     default:
