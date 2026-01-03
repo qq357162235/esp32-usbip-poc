@@ -7,8 +7,8 @@
    CONDITIONS OF ANY KIND, either express or implied.
 */
 #include <string.h>
-#include <esp_system.h>  // 若编译器提示找不到此头文件，可尝试改用 <esp_system.h> 或移除本行
 #include <errno.h>
+#include <sys/time.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
