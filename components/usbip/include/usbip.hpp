@@ -1,9 +1,10 @@
 #pragma once
 #include <string.h>
+#include <vector>
 #include "usb/usb_host.h"
 #include "usb/cdc_acm_host.h"
-#include "usb/vcp.hpp"
-#include "usb/vcp_cp210x.hpp"
+// #include "usb/vcp.hpp"
+// #include "usb/vcp_cp210x.hpp"
 #include "esp_event.h"
 #include "usb_device.hpp"
 

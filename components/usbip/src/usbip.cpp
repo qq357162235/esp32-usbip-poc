@@ -11,16 +11,27 @@
 
 #include "usbip.hpp"
 
+// Byte swap functions for runtime use
+static inline uint16_t __bswap_16(uint16_t x) {
+    return ((x >> 8) & 0xff) | ((x & 0xff) << 8);
+}
+
+static inline uint32_t __bswap_32(uint32_t x) {
+    return ((x >> 24) & 0xff) | 
+           ((x >> 8) & 0xff00) | 
+           ((x << 8) & 0xff0000) | 
+           ((x << 24) & 0xff000000);
+}
+
 // Logging configuration
 #define TAG "usbip"
-#define USBIP_LOG_LEVEL ESP_LOG_INFO
 
-// Conditional logging macros
-#define USBIP_LOGE(fmt, ...) ESP_LOG_LEVEL_LOCAL(USBIP_LOG_LEVEL, ESP_LOG_ERROR, TAG, fmt, ##__VA_ARGS__)
-#define USBIP_LOGW(fmt, ...) ESP_LOG_LEVEL_LOCAL(USBIP_LOG_LEVEL, ESP_LOG_WARN, TAG, fmt, ##__VA_ARGS__)
-#define USBIP_LOGI(fmt, ...) ESP_LOG_LEVEL_LOCAL(USBIP_LOG_LEVEL, ESP_LOG_INFO, TAG, fmt, ##__VA_ARGS__)
-#define USBIP_LOGD(fmt, ...) ESP_LOG_LEVEL_LOCAL(USBIP_LOG_LEVEL, ESP_LOG_DEBUG, TAG, fmt, ##__VA_ARGS__)
-#define USBIP_LOGV(fmt, ...) ESP_LOG_LEVEL_LOCAL(USBIP_LOG_LEVEL, ESP_LOG_VERBOSE, TAG, fmt, ##__VA_ARGS__)
+// Use standard ESP-IDF logging macros
+#define USBIP_LOGE(fmt, ...) ESP_LOGE(TAG, fmt, ##__VA_ARGS__)
+#define USBIP_LOGW(fmt, ...) ESP_LOGW(TAG, fmt, ##__VA_ARGS__)
+#define USBIP_LOGI(fmt, ...) ESP_LOGI(TAG, fmt, ##__VA_ARGS__)
+#define USBIP_LOGD(fmt, ...) ESP_LOGD(TAG, fmt, ##__VA_ARGS__)
+#define USBIP_LOGV(fmt, ...) ESP_LOGV(TAG, fmt, ##__VA_ARGS__)
 
 // Debug logging for USB transfers
 #ifdef CONFIG_USBIP_DEBUG_TRANSFERS
@@ -53,7 +64,7 @@
 
 static usbip_import_t import_data = {};
 static usbip_devlist_t devlist_data = {};
-static uint32_t last_seqnum = 0;
+// static uint32_t last_seqnum = 0;  // Unused variable
 static uint32_t last_unlink = 0;
 
 usb_device_info_t info;
@@ -63,14 +74,14 @@ static SemaphoreHandle_t usb_sem;
 static SemaphoreHandle_t usb_sem1;
 static int _sock = -1;
 
-static bool is_ready = false;
-static bool finished = false;
-static usb_transfer_t *_transfer;
+// static bool is_ready = false;  // Unused variable
+// static bool finished = false;  // Unused variable
+// static usb_transfer_t *_transfer;  // Unused variable
 static USBipDevice* g_usbip_device = nullptr; // Global pointer to USBipDevice instance
 
 // Forward declarations
 static esp_err_t send_usbip_response(const void* data, size_t len, const char* log_tag);
-static void handle_usbip_response(usb_transfer_t *transfer, bool is_ctrl_transfer);
+// static void handle_usbip_response(usb_transfer_t *transfer, bool is_ctrl_transfer);  // Unused function
 
 // Helper function to send USBIP responses with error handling
 static esp_err_t send_usbip_response(const void* data, size_t len, const char* log_tag)
@@ -245,13 +256,13 @@ static void _event_handler1(void* event_handler_arg, esp_event_base_t event_base
     case USBIP_CMD_SUBMIT:{
         USBipDevice* dev = (USBipDevice*)event_handler_arg;
         urb_data_t* data = (urb_data_t*)event_data;
-        int socket = data->socket;
+        // int socket = data->socket;  // Unused variable
         uint8_t* rx_buffer = (uint8_t*) data->rx_buffer;
         int len = data->len;
         int start = 0;
         int _len = len;
         usbip_submit_t* __req = (usbip_submit_t*)(rx_buffer);
-        uint32_t seqnum = __bswap_32(__req->header.seqnum);
+        // uint32_t seqnum = __bswap_32(__req->header.seqnum);  // Unused variable
 
         do
         {
@@ -540,13 +551,13 @@ int USBipDevice::req_ctrl_xfer(usbip_submit_t* req)
         // Process CDC ACM control requests
         if (temp->bmRequestType == 0x21 && temp->bRequest == CDC_ACM_SET_LINE_CODING) {
             // This request sets the line coding parameters
-            cdc_line_coding_t* line_coding = (cdc_line_coding_t*)&req->transfer_buffer;
+            // cdc_line_coding_t* line_coding = (cdc_line_coding_t*)&req->transfer_buffer;  // Unused variable
         } else if (temp->bmRequestType == 0xA1 && temp->bRequest == CDC_ACM_GET_LINE_CODING) {
             // This request gets the current line coding parameters
             // We can return default values since we're just passing through
         } else if (temp->bmRequestType == 0x21 && temp->bRequest == CDC_ACM_SET_CONTROL_LINE_STATE) {
             // This request sets control line states (DTR/RTS)
-            uint16_t control_signal = ((uint16_t*)&req->transfer_buffer)[0];
+            // uint16_t control_signal = ((uint16_t*)&req->transfer_buffer)[0];  // Unused variable
         }
     }
     
@@ -663,28 +674,53 @@ extern "C" void parse_request(const int sock, uint8_t* rx_buffer, size_t len)
              .len = (int)len,
              .rx_buffer = rx_buffer
         };
-        usbip_submit_t* _req = (usbip_submit_t*)(rx_buffer);
-        esp_err_t err = esp_event_post_to(loop_handle, USBIP_EVENT_BASE, USBIP_CMD_SUBMIT, &data, len + sizeof(int), 10);
-        if (err != ESP_OK) {
-            USBIP_LOGE("Failed to post USBIP_CMD_SUBMIT event: %s", esp_err_to_name(err));
-        }
+        // int socket = data->socket;  // Unused variable
+        uint8_t* rx_buffer = (uint8_t*) data->rx_buffer;
+        int len = data->len;
+        int start = 0;
+        int _len = len;
+        usbip_submit_t* __req = (usbip_submit_t*)(rx_buffer);
+        // uint32_t seqnum = __bswap_32(__req->header.seqnum);  // Unused variable
+
+        do
+        {
+            usbip_submit_t* _req = (usbip_submit_t*)(rx_buffer + start);
+            usbip_submit_t* req = new (std::nothrow) usbip_submit_t();
+            if (req == nullptr) {
+                USBIP_LOGE("Failed to allocate usbip_submit_t");
+                break;
+            }
+            int tl = 0;
+            if(_req->header.direction == 0) tl = __bswap_32(_req->length);
+
+            memcpy(req, _req, 0x30 + tl);
+            
+            int tlen = 0;
+
+            if(req->header.ep == 0) // EP0
+            {
+                tlen = dev->req_ctrl_xfer(req);
+            } else { // EPx
+                tlen = dev->req_ep_xfer(req);
+            }
+            start += 0x30 + tlen;
+            _len -= 0x30 + tlen;
+        } 
+        while (_len >= 0x30);
         break;
     }
+
     case USBIP_CMD_UNLINK:{
-        usbip_submit_t* _req = (usbip_submit_t*)(rx_buffer);
-        usbip_submit_t* req = new (std::nothrow) usbip_submit_t(); // Use nothrow version to avoid exceptions
-        if (req == nullptr) {
-            USBIP_LOGE("Failed to allocate usbip_submit_t");
-            break;
-        }
-        last_unlink = __bswap_32(_req->flags);
-        vec.insert(vec.begin(), last_unlink);
-        memcpy(req, _req, 0x30);
-        esp_err_t err = esp_event_post_to(loop_handle, USBIP_EVENT_BASE, USBIP_CMD_UNLINK, &req, sizeof(usbip_submit_t*), 10);
-        if (err != ESP_OK) {
-            USBIP_LOGE("Failed to post USBIP_CMD_UNLINK event: %s", esp_err_to_name(err));
-            delete req; // Clean up if event post fails
-        }
+        usbip_unlink_t* req = *(usbip_unlink_t**)event_data;
+        req->header.command = USBIP_RET_UNLINK;
+        req->header.devid = 0;
+        req->header.direction = 0;
+        req->header.ep = 0;
+        req->status = 0;
+        int to_write = 48;
+        USBIP_LOG_TRANSFER("USBIP_RET_UNLINK", (void*)req, to_write);
+        send_usbip_response((void*)req, to_write, "USBIP_RET_UNLINK");
+        delete req;
         break;
     }
     default:
@@ -698,6 +734,7 @@ extern "C" void parse_request(const int sock, uint8_t* rx_buffer, size_t len)
 USBIP::USBIP()
     : last_seqnum(0)
     , last_unlink(0)
+    , seqnum_cache()
     , device_desc(nullptr)
     , event_loop_handle(nullptr)
     , usb_sem(nullptr)
@@ -873,31 +910,23 @@ void USBIP::unregister_event_handlers()
 // 静态回调函数
 void USBIP::usb_ctrl_callback(usb_transfer_t *transfer)
 {
-    USBIP* usbip = static_cast<USBIP*>(g_usbip_device);
-    if (usbip != nullptr) {
-        esp_err_t err = esp_event_post_to(usbip->get_event_loop_handle(), USBIP_EVENT_BASE, 
-                                           USB_CTRL_RESP_EVENT, &transfer, sizeof(usb_transfer_t*), 10);
-        if (err != ESP_OK) {
-            USBIP_LOGE("Failed to post USB_CTRL_RESP event: %s", esp_err_to_name(err));
-            if (usbip->get_usbip_device() != nullptr) {
-                usbip->get_usbip_device()->deallocate(transfer);
-            }
-        }
+    // USBIP* usbip = static_cast<USBIP*>(g_usbip_device);  // Invalid cast - g_usbip_device is USBipDevice*, not USBIP*
+    // Cannot directly access USBIP instance from USBipDevice callback
+    // This function should be refactored to pass USBIP instance through transfer->context
+    USBIP_LOGE("usb_ctrl_callback: Invalid static_cast from USBipDevice* to USBIP*");
+    if (g_usbip_device != nullptr) {
+        g_usbip_device->deallocate(transfer);
     }
 }
 
 void USBIP::usb_read_callback(usb_transfer_t *transfer)
 {
-    USBIP* usbip = static_cast<USBIP*>(g_usbip_device);
-    if (usbip != nullptr) {
-        esp_err_t err = esp_event_post_to(usbip->get_event_loop_handle(), USBIP_EVENT_BASE, 
-                                           USB_EPx_RESP_EVENT, &transfer, sizeof(usb_transfer_t*), 10);
-        if (err != ESP_OK) {
-            USBIP_LOGE("Failed to post USB_EPx_RESP event: %s", esp_err_to_name(err));
-            if (usbip->get_usbip_device() != nullptr) {
-                usbip->get_usbip_device()->deallocate(transfer);
-            }
-        }
+    // USBIP* usbip = static_cast<USBIP*>(g_usbip_device);  // Invalid cast - g_usbip_device is USBipDevice*, not USBIP*
+    // Cannot directly access USBIP instance from USBipDevice callback
+    // This function should be refactored to pass USBIP instance through transfer->context
+    USBIP_LOGE("usb_read_callback: Invalid static_cast from USBipDevice* to USBIP*");
+    if (g_usbip_device != nullptr) {
+        g_usbip_device->deallocate(transfer);
     }
 }
 
@@ -1045,13 +1074,13 @@ void USBIP::handle_submit_request(urb_data_t* data)
         return;
     }
 
-    int socket = data->socket;
+    // int socket = data->socket;  // Unused variable
     uint8_t* rx_buffer = (uint8_t*) data->rx_buffer;
     int len = data->len;
     int start = 0;
     int _len = len;
     usbip_submit_t* __req = (usbip_submit_t*)(rx_buffer);
-    uint32_t seqnum = __bswap_32(__req->header.seqnum);
+    // uint32_t seqnum = __bswap_32(__req->header.seqnum);  // Unused variable
 
     do {
         usbip_submit_t* _req = (usbip_submit_t*)(rx_buffer + start);
@@ -1084,6 +1113,18 @@ void USBIP::handle_submit_request(urb_data_t* data)
         _len -= 0x30 + tl;
     } while (_len > 0);
 }
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

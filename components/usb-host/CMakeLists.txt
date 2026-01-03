@@ -1,4 +1,5 @@
-idf_component_register(SRCS "host/usb_host.cpp" "host/usb_device.cpp"
+idf_component_register(SRCS "src/usb_host.cpp" "src/usb_device.cpp"
     INCLUDE_DIRS "include"
-    PRIV_REQUIRES usb
+    REQUIRES usb
 )
+
