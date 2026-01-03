@@ -14,7 +14,6 @@ void _client_event_callback(const usb_host_client_event_msg_t *event_msg, void *
     USBhost *host = (USBhost *)arg;
     if (event_msg->event == USB_HOST_CLIENT_EVENT_NEW_DEV)
     {
-        host->open(event_msg);
         ESP_LOGI("USB_HOST_CLIENT_EVENT_NEW_DEV", "client event: %d, address: %d", event_msg->event, event_msg->new_dev.address);
         if (host->_client_event_cb)
         {
@@ -40,7 +39,9 @@ static void client_async_seq_task(void *param)
     {
         usb_host_client_handle_t client_hdl = host->client_hdl;
         uint32_t event_flags;
-        if(client_hdl)usb_host_client_handle_events(client_hdl, 1);
+        if(client_hdl) {
+            usb_host_client_handle_events(client_hdl, 1);
+        }
         if (ESP_OK == usb_host_lib_handle_events(1, &event_flags))
         {
             if (event_flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS)
@@ -55,8 +56,10 @@ static void client_async_seq_task(void *param)
             if (event_flags & USB_HOST_LIB_EVENT_FLAGS_ALL_FREE)
             {
                 ESP_LOGD("", "USB_HOST_LIB_EVENT_FLAGS_ALL_FREE\n");
-                usb_host_client_deregister(client_hdl);
-                host->client_hdl = NULL;
+                if(client_hdl) {
+                    usb_host_client_deregister(client_hdl);
+                    host->client_hdl = NULL;
+                }
             }
         }
     }
@@ -102,8 +105,11 @@ bool USBhost::init(bool create_tasks)
 bool USBhost::open(const usb_host_client_event_msg_t *event_msg)
 {
     esp_err_t err = usb_host_device_open(client_hdl, event_msg->new_dev.address, &dev_hdl);
+    if (err != ESP_OK) {
+        ESP_LOGE("USB_HOST", "Failed to open device: %s", esp_err_to_name(err));
+        return false;
+    }
     parseConfig();
-
     return true;
 }
 

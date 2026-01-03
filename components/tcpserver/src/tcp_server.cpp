@@ -7,7 +7,7 @@
    CONDITIONS OF ANY KIND, either express or implied.
 */
 #include <string.h>
-#include <esp_system.h>  // 若编译器提示找不到此头文件，可尝试改用 <esp_system.h> 或移除本行
+// sys/param.h 在 ESP-IDF 中不存在，移除即可
 #include <errno.h>
 
 #include "freertos/FreeRTOS.h"
@@ -25,6 +25,9 @@
 #include "lwip/sys.h"
 #include <lwip/netdb.h>
 #include "lwip/ip_addr.h"
+
+// Include USBIP header for parse_request function
+#include "usbip.hpp"
 
 void parse_request(const int sock, uint8_t* rx_buffer, size_t len);
 
@@ -58,7 +61,7 @@ static void close_socket_safely(int sock)
 {
     if (sock >= 0) {
         shutdown(sock, SHUT_RDWR);
-        lwip_close(sock);
+        close(sock);
     }
 }
 
@@ -277,6 +280,7 @@ CLEAN_UP:
 void esp_event_handler(void* event_handler_arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
     if (event_base == WIFI_EVENT)
+
     {
         switch(event_id) 
         {

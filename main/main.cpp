@@ -30,7 +30,7 @@ static usbip_config_t g_usbip_config;
 
 extern "C" void start_server();
 USBhost* host = nullptr;
-static USBipDevice* device = nullptr;
+USBipDevice* device = nullptr;
 static bool is_ready = false;
 static USBIP usbip;
 
@@ -48,14 +48,14 @@ void client_event_callback(const usb_host_client_event_msg_t *event_msg, void *a
         }
 
         // Get device information
-        info = host->getDeviceInfo();
+        usb_device_info_t info = host->getDeviceInfo();
         ESP_LOGI("USB_HOST", "Device connected - speed: %s, address: %d, max ep_ctrl size: %d, config: %d", 
                  info.speed ? "USB_SPEED_FULL" : "USB_SPEED_LOW", 
                  info.dev_addr, 
                  info.bMaxPacketSize0, 
                  info.bConfigurationValue);
         
-        dev_desc = host->getDeviceDescriptor();
+        const usb_device_desc_t* dev_desc = host->getDeviceDescriptor();
         if (dev_desc == nullptr) {
             ESP_LOGE("USB_HOST", "Failed to get device descriptor");
             return;
@@ -105,13 +105,7 @@ esp_err_t init_usbip()
     }
     
     // Register client callback
-    err = host->registerClientCb(client_event_callback);
-    if (err != ESP_OK) {
-        ESP_LOGE("USB_HOST", "Failed to register client callback: %s", esp_err_to_name(err));
-        delete host;
-        host = nullptr;
-        return err;
-    }
+    host->registerClientCb(client_event_callback);
     
     // Initialize USB host
     err = host->init();
@@ -133,17 +127,9 @@ esp_err_t init_usbip()
     // Register all supported VCP drivers
     ESP_LOGI("VCP", "Registering VCP drivers");
     
-    if (!VCP::register_driver<FT23x>()) {
-        ESP_LOGW("VCP", "Failed to register FT23x driver");
-    }
-    
-    if (!VCP::register_driver<CP210x>()) {
-        ESP_LOGW("VCP", "Failed to register CP210x driver");
-    }
-    
-    if (!VCP::register_driver<CH34x>()) {
-        ESP_LOGW("VCP", "Failed to register CH34x driver");
-    }
+    VCP::register_driver<FT23x>();
+    VCP::register_driver<CP210x>();
+    VCP::register_driver<CH34x>();
     
     ESP_LOGI("USB_HOST", "USBIP initialized successfully");
     return ESP_OK;

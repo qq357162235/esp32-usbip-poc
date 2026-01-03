@@ -647,6 +647,9 @@ int USBipDevice::req_ep_xfer(usbip_submit_t* req)
 }
 
 // Process incoming USBIP requests and dispatch to event handlers
+// 声明全局device变量
+extern USBipDevice* device;
+
 extern "C" void parse_request(const int sock, uint8_t* rx_buffer, size_t len)
 {
     uint32_t cmd = ((usbip_request_t*)rx_buffer)->command;
@@ -674,9 +677,9 @@ extern "C" void parse_request(const int sock, uint8_t* rx_buffer, size_t len)
              .len = (int)len,
              .rx_buffer = rx_buffer
         };
-        // int socket = data->socket;  // Unused variable
-        uint8_t* rx_buffer = (uint8_t*) data->rx_buffer;
-        int len = data->len;
+        // int socket = data.socket;  // Unused variable
+        uint8_t* rx_buffer = (uint8_t*) data.rx_buffer;
+        int len = data.len;
         int start = 0;
         int _len = len;
         usbip_submit_t* __req = (usbip_submit_t*)(rx_buffer);
@@ -697,11 +700,15 @@ extern "C" void parse_request(const int sock, uint8_t* rx_buffer, size_t len)
             
             int tlen = 0;
 
-            if(req->header.ep == 0) // EP0
-            {
-                tlen = dev->req_ctrl_xfer(req);
-            } else { // EPx
-                tlen = dev->req_ep_xfer(req);
+            if(device != nullptr) {
+                if(req->header.ep == 0) // EP0
+                {
+                    tlen = device->req_ctrl_xfer(req);
+                } else { // EPx
+                    tlen = device->req_ep_xfer(req);
+                }
+            } else {
+                USBIP_LOGE("Device not available");
             }
             start += 0x30 + tlen;
             _len -= 0x30 + tlen;
@@ -711,16 +718,8 @@ extern "C" void parse_request(const int sock, uint8_t* rx_buffer, size_t len)
     }
 
     case USBIP_CMD_UNLINK:{
-        usbip_unlink_t* req = *(usbip_unlink_t**)event_data;
-        req->header.command = USBIP_RET_UNLINK;
-        req->header.devid = 0;
-        req->header.direction = 0;
-        req->header.ep = 0;
-        req->status = 0;
-        int to_write = 48;
-        USBIP_LOG_TRANSFER("USBIP_RET_UNLINK", (void*)req, to_write);
-        send_usbip_response((void*)req, to_write, "USBIP_RET_UNLINK");
-        delete req;
+        // Handle unlink request
+        USBIP_LOGE("USBIP_CMD_UNLINK not implemented yet");
         break;
     }
     default:
