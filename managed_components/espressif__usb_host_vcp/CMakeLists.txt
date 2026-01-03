@@ -7,7 +7,5 @@ if (CMAKE_CXX_COMPILER_VERSION VERSION_LESS_EQUAL 13.2)  # https://gcc.gnu.org/b
         CXX_STANDARD 14
         CXX_STANDARD_REQUIRED ON
     )
-    target_compile_options(${COMPONENT_LIB} PRIVATE -fconcepts -fexceptions)
-else()
-    target_compile_options(${COMPONENT_LIB} PRIVATE -fexceptions)
+    target_compile_options(${COMPONENT_LIB} PRIVATE -fconcepts)
 endif()

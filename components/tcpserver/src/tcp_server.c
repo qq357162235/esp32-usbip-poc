@@ -281,7 +281,11 @@ void esp_event_handler(void* event_handler_arg, esp_event_base_t event_base, int
         switch(event_id) 
         {
             case WIFI_EVENT_AP_START:
-                ESP_LOGI(TAG, "AP started");
+                ESP_LOGI(TAG, "*** AP START EVENT RECEIVED! ***");
+                ESP_LOGI(TAG, "WiFi AP started successfully!");
+                ESP_LOGI(TAG, "SSID: %s", EXAMPLE_WIFI_SSID);
+                ESP_LOGI(TAG, "Password: %s", strlen(EXAMPLE_WIFI_PASSWORD) > 0 ? "***" : "None");
+                
                 // 获取AP的IP地址
                 esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
                 if (ap_netif) {
@@ -290,6 +294,9 @@ void esp_event_handler(void* event_handler_arg, esp_event_base_t event_base, int
                     char myIP[20];
                     sprintf(myIP, IPSTR, IP2STR(&ip_info.ip));
                     ESP_LOGI(TAG, "AP IP address: %s", myIP);
+                    ESP_LOGI(TAG, "AP should be visible on network scanner now!");
+                } else {
+                    ESP_LOGW(TAG, "Could not get AP netif handle");
                 }
                 xEventGroupSetBits(wifi_event_grp, WIFI_CONNECTED_BIT);
                 break;
@@ -348,14 +355,18 @@ void wifi_init_ap(char* ssid, char* pass)
     }
     wifi_config.ap.ssid_hidden = 0;
     wifi_config.ap.beacon_interval = 100;
+    wifi_config.ap.channel = 6;  // 设置默认通道
 
     esp_err_t err = esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set WiFi config: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "WiFi config failed! SSID: %s, Auth: %s", 
+                 ssid, pass ? "WPA2" : "OPEN");
         return;
     }
 
-    ESP_LOGI(TAG, "WiFi AP configured. SSID: %s, Auth: %s, Max connections: %d",
+    ESP_LOGI(TAG, "WiFi AP configured successfully!");
+    ESP_LOGI(TAG, "SSID: %s, Auth: %s, Max connections: %d",
              ssid, pass ? "WPA2" : "OPEN", wifi_config.ap.max_connection);
 }
 
@@ -519,6 +530,13 @@ esp_err_t wifi_init(void)
         return err;
     }
     
+    ESP_LOGI(TAG, "WiFi stack initialized, configuring AP...");
+    
+    // Configure AP (must be called before esp_wifi_start())
+    wifi_init_ap(EXAMPLE_WIFI_SSID, EXAMPLE_WIFI_PASSWORD);
+    
+    ESP_LOGI(TAG, "AP configured, starting WiFi...");
+    
     // Start WiFi
     err = esp_wifi_start();
     if (err != ESP_OK) {
@@ -526,8 +544,7 @@ esp_err_t wifi_init(void)
         return err;
     }
     
-    // Configure AP
-    wifi_init_ap(EXAMPLE_WIFI_SSID, EXAMPLE_WIFI_PASSWORD);
+    ESP_LOGI(TAG, "WiFi started, waiting for AP_START event...");
 
     ESP_LOGI(TAG, "WiFi initialized successfully");
     return ESP_OK;
